@@ -468,6 +468,8 @@
   .week-cell .day{font-size:0.62rem;text-transform:uppercase;letter-spacing:0.05em;color:var(--ink-soft);}
   .week-cell .tag{font-family:var(--mono);font-size:0.8rem;font-weight:700;}
   .week-cell.strength .tag{color:var(--buoy);}
+  button.week-cell{font:inherit;color:inherit;cursor:pointer;align-items:center;min-height:44px;}
+  .week-cell.strength{border-color:var(--buoy);}
   .week-cell.flex .tag{color:var(--teal-soft);font-size:0.58rem;font-weight:600;}
   .week-note{font-size:0.82rem;color:var(--ink-soft);margin:0;}
 
@@ -614,7 +616,7 @@
   "use strict";
 
   var STORAGE_KEY = "sc-tracker-v1";
-  var BUILD = "12 Oct 2026 a";
+  var BUILD = "12 Oct 2026 b";
   var CORRUPT_KEY = "sc-tracker-v1-corrupt";
   var DRAFT_KEY = "sc-tracker-v1-draft";
   var DAY_ORDER = ["A","B"];
@@ -1479,8 +1481,8 @@
     var cards = PRIMARY_LIFTS.map(function(pl){ return liftCard(person, pl.day, pl.id); }).join("");
     var weeks = weekBuckets(person);
     var weekBars = weeks.map(function(w, i){
-      var pct = Math.min(w.count, 2) / 2 * 100;
-      var tone = w.count >= 2 ? "var(--teal)" : (w.count >= 1 ? "var(--buoy-soft)" : "var(--line)");
+      var tgt = trainDays().length; var pct = Math.min(w.count, tgt) / tgt * 100;
+      var tone = w.count >= tgt ? "var(--teal)" : (w.count >= 1 ? "var(--buoy-soft)" : "var(--line)");
       return '<div class="week-bar" title="' + w.count + ' session(s)"><div class="bar-fill" style="height:' + pct + '%;background:' + tone + '"></div><span class="week-count">' + w.count + '</span></div>';
     }).join("");
     var deloadWeeks = deloadWeeksDue(person);
@@ -1505,7 +1507,7 @@
       + '<div class="banner ' + banner.tone + '"><strong>' + esc(banner.text) + '</strong><p>' + esc(banner.detail) + '</p></div>'
       + '<div class="lift-grid">' + cards + '</div>'
       + bestsCard(person)
-      + '<div class="card"><h2>Consistency (last 8 weeks)</h2><div class="consistency-row">' + weekBars + '</div><p class="soft small">Target: 2 sessions/week. Rightmost bar is this week.</p></div>'
+      + '<div class="card"><h2>Consistency (last 8 weeks)</h2><div class="consistency-row">' + weekBars + '</div><p class="soft small">Target: ' + trainDays().length + ' session(s)/week, from your gym days on the Plan tab. Rightmost bar is this week.</p></div>'
       + deloadHtml;
   }
 
@@ -1536,23 +1538,32 @@
       + '</div>';
   }
 
+  /* Which weekdays she trains (0 = Monday). Stored on the profile; default Friday. */
+  function trainDays(){
+    var d = store.profiles[ui.person].trainDays;
+    if (!Array.isArray(d) || !d.length) return [4];
+    return d.filter(function(x){ return x >= 0 && x <= 6; });
+  }
+
   function renderPlan(){
     var out = "";
 
-    out += '<div class="banner"><strong>Your programme, 12 October 2026</strong><p>Two full-body sessions a week. Want to change anything? Just tell Lewis.</p></div>';
+    out += '<div class="banner"><strong>Your programme, 12 October 2026</strong><p>Two full-body sessions, A and B, taken in turn on whichever days you go. Want to change anything? Just tell Lewis.</p></div>';
 
+    var days = trainDays();
+    var names = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
+    var sessions = personSessions(ui.person).slice().sort(function(a,b){ return a.date.localeCompare(b.date); });
+    var next = nextDay(sessions.length ? sessions[sessions.length-1].day : null);
+    var cells = names.map(function(n, i){
+      var on = days.indexOf(i) !== -1;
+      var tag = "Rest";
+      if (on){ tag = next; next = nextDay(next); }
+      return '<button type="button" class="week-cell ' + (on ? "strength" : "flex") + '" data-action="toggle-train-day" data-dow="' + i + '" aria-pressed="' + on + '"><span class="day">' + n + '</span><span class="tag">' + tag + '</span></button>';
+    }).join("");
     out += '<div class="card">'
-      + '<div class="eyebrow">Suggested week</div>'
-      + '<div class="week-strip">'
-      + '<div class="week-cell strength"><span class="day">Mon</span><span class="tag">A</span></div>'
-      + '<div class="week-cell flex"><span class="day">Tue</span><span class="tag">Hockey</span></div>'
-      + '<div class="week-cell flex"><span class="day">Wed</span><span class="tag">Row</span></div>'
-      + '<div class="week-cell strength"><span class="day">Thu</span><span class="tag">B</span></div>'
-      + '<div class="week-cell flex"><span class="day">Fri</span><span class="tag">Rest</span></div>'
-      + '<div class="week-cell flex"><span class="day">Sat</span><span class="tag">Hockey</span></div>'
-      + '<div class="week-cell flex"><span class="day">Sun</span><span class="tag">Rest</span></div>'
-      + '</div>'
-      + '<p class="week-note">Move the days to fit your hockey and rowing. Two rules: keep Session B at least a day away from a match, and leave a day between A and B where you can. One visit in a week still counts; just do the next session.</p>'
+      + '<div class="eyebrow">Your gym days</div>'
+      + '<div class="week-strip">' + cells + '</div>'
+      + '<p class="week-note">Tap a day to add or remove it. The letters show which session comes next on each day. Going once a week is fine: you simply do A one week and B the next. With two days, keep Session B at least a day away from a hockey match.</p>'
       + '</div>';
 
     out += '<div class="card"><h2>Why this shape</h2>'
@@ -2129,6 +2140,19 @@
     if (action === "save-session"){
       var session = draftToSession(ui.draft);
       persistAndSwitch(session);
+      render();
+      return;
+    }
+
+    if (action === "toggle-train-day"){
+      var dow = parseInt(btn.dataset.dow, 10);
+      var prof = store.profiles[ui.person];
+      var cur = trainDays().slice();
+      var at = cur.indexOf(dow);
+      if (at === -1) cur.push(dow); else if (cur.length > 1) cur.splice(at, 1);
+      cur.sort(function(a,b){ return a-b; });
+      prof.trainDays = cur;
+      saveStore();
       render();
       return;
     }
